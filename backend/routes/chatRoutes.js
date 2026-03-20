@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
+const { protect: auth } = require('../middleware/auth');
 
 // Get user conversations
 router.get('/conversations', auth, async (req, res) => {
