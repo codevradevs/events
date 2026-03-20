@@ -1,95 +1,80 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import EventCard from '../components/EventCard';
 import './Home.css';
 
+const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const LIMIT = 8;
+
 const Home = () => {
   const { user } = useContext(AuthContext);
   const navigate = useNavigate();
-  const [trending, setTrending] = useState([]);
-  const [recommended, setRecommended] = useState([]);
-  const [nearby, setNearby] = useState([]);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState('trending');
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchAllEvents();
+  const [tabs, setTabs] = useState({
+    trending:    { events: [], page: 1, hasMore: true, loading: false },
+    recommended: { events: [], page: 1, hasMore: true, loading: false },
+    nearby:      { events: [], page: 1, hasMore: true, loading: false },
+  });
+
+  const fetchTab = useCallback(async (tab, page, replace = false) => {
+    setTabs(prev => ({ ...prev, [tab]: { ...prev[tab], loading: true } }));
+    try {
+      const { data } = await axios.get(`${API}/api/events/${tab}?page=${page}&limit=${LIMIT}`);
+      setTabs(prev => ({
+        ...prev,
+        [tab]: {
+          events: replace ? data.events : [...prev[tab].events, ...data.events],
+          page,
+          hasMore: page < data.pages,
+          loading: false
+        }
+      }));
+    } catch {
+      setTabs(prev => ({ ...prev, [tab]: { ...prev[tab], loading: false } }));
+    }
   }, []);
 
-  const fetchAllEvents = async () => {
-    setLoading(true);
-    try {
-      await Promise.all([
-        fetchTrending(),
-        fetchRecommended(),
-        fetchNearby()
-      ]);
-    } catch (error) {
-      console.error('Failed to fetch events:', error);
-    } finally {
+  useEffect(() => {
+    const init = async () => {
+      setLoading(true);
+      await fetchTab('trending', 1, true);
       setLoading(false);
+    };
+    init();
+  }, [fetchTab]);
+
+  // Lazy-load other tabs on first switch
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    if (tabs[tab].events.length === 0 && !tabs[tab].loading) {
+      fetchTab(tab, 1, true);
     }
   };
 
-  const fetchTrending = async () => {
-    try {
-      const { data } = await axios.get('http://localhost:5000/api/events/trending');
-      setTrending(data);
-    } catch (error) {
-      console.error('Failed to fetch trending events:', error);
-      setTrending([]);
-    }
-  };
-
-  const fetchRecommended = async () => {
-    try {
-      const { data } = await axios.get('http://localhost:5000/api/events/recommended');
-      setRecommended(data);
-    } catch (error) {
-      setRecommended([]);
-    }
-  };
-
-  const fetchNearby = async () => {
-    try {
-      const { data } = await axios.get('http://localhost:5000/api/events/nearby');
-      setNearby(data);
-    } catch (error) {
-      setNearby([]);
-    }
+  const loadMore = () => {
+    const next = tabs[activeTab].page + 1;
+    fetchTab(activeTab, next, false);
   };
 
   const handleSearch = async () => {
-    if (!search.trim()) {
-      fetchTrending();
-      return;
-    }
+    if (!search.trim()) { fetchTab('trending', 1, true); return; }
     try {
-      const { data } = await axios.get(`http://localhost:5000/api/events?search=${search}`);
-      setTrending(data);
+      const { data } = await axios.get(`${API}/api/events?search=${search}&limit=${LIMIT}`);
+      setTabs(prev => ({ ...prev, trending: { events: data.events, page: 1, hasMore: 1 < data.pages, loading: false } }));
       setActiveTab('trending');
     } catch (error) {
       console.error('Search failed:', error);
     }
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      handleSearch();
-    }
-  };
+  const handleKeyPress = (e) => { if (e.key === 'Enter') handleSearch(); };
 
-  const getCurrentEvents = () => {
-    switch(activeTab) {
-      case 'trending': return trending;
-      case 'recommended': return recommended;
-      case 'nearby': return nearby;
-      default: return trending;
-    }
-  };
+  const current = tabs[activeTab];
 
   const getTabTitle = () => {
     switch(activeTab) {
@@ -281,29 +266,27 @@ const Home = () => {
           }}>
             <button 
               className={activeTab === 'trending' ? 'btn-primary' : 'btn-secondary'}
-              onClick={() => setActiveTab('trending')}
+              onClick={() => handleTabChange('trending')}
               style={{ borderRadius: '25px', padding: '0.8rem 1.5rem' }}
             >
-              🔥 Trending ({trending.length})
+              🔥 Trending ({tabs.trending.events.length}{tabs.trending.hasMore ? '+' : ''})
             </button>
-            {user && recommended.length > 0 && (
+            {user && (
               <button 
                 className={activeTab === 'recommended' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setActiveTab('recommended')}
+                onClick={() => handleTabChange('recommended')}
                 style={{ borderRadius: '25px', padding: '0.8rem 1.5rem' }}
               >
-                ✨ For You ({recommended.length})
+                ✨ For You ({tabs.recommended.events.length}{tabs.recommended.hasMore ? '+' : ''})
               </button>
             )}
-            {nearby.length > 0 && (
-              <button 
-                className={activeTab === 'nearby' ? 'btn-primary' : 'btn-secondary'}
-                onClick={() => setActiveTab('nearby')}
-                style={{ borderRadius: '25px', padding: '0.8rem 1.5rem' }}
-              >
-                📍 Nearby ({nearby.length})
-              </button>
-            )}
+            <button 
+              className={activeTab === 'nearby' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => handleTabChange('nearby')}
+              style={{ borderRadius: '25px', padding: '0.8rem 1.5rem' }}
+            >
+              📍 Nearby ({tabs.nearby.events.length}{tabs.nearby.hasMore ? '+' : ''})
+            </button>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
@@ -321,16 +304,24 @@ const Home = () => {
             )}
           </div>
 
-          {getCurrentEvents().length === 0 ? (
+          {current.events.length === 0 && !current.loading ? (
             <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
               <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>🎪</div>
               <h3>No events found</h3>
               <p style={{ color: '#C7C7C7' }}>Check back later for new events!</p>
             </div>
           ) : (
-            <div className="modern-event-grid">
-              {getCurrentEvents().map(event => <EventCard key={event._id} event={event} />)}
-            </div>
+            <>
+              <div className="modern-event-grid">
+                {current.events.map(event => <EventCard key={event._id} event={event} />)}
+              </div>
+              {current.loading && <p style={{ textAlign: 'center', padding: '1rem', color: '#C7C7C7' }}>Loading...</p>}
+              {!current.loading && current.hasMore && (
+                <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+                  <button className="btn-secondary" onClick={loadMore}>Load More</button>
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>

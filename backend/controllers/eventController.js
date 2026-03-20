@@ -27,17 +27,24 @@ exports.createEvent = async (req, res) => {
 
 exports.getEvents = async (req, res) => {
   try {
-    const { category, location, minPrice, maxPrice, date, search } = req.query;
+    const { category, location, minPrice, maxPrice, date, search, page = 1, limit = 12 } = req.query;
     const query = { status: 'published' };
     
     if (category) query.category = category;
     if (date) query.date = { $gte: new Date(date) };
     if (search) query.$text = { $search: search };
-    
-    const events = await Event.find(query)
-      .sort({ 'featured.boostLevel': -1, trending: -1, date: 1 })
-      .populate('organizer', 'username verified');
-    res.json(events);
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [events, total] = await Promise.all([
+      Event.find(query)
+        .sort({ 'featured.boostLevel': -1, trending: -1, date: 1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .populate('organizer', 'username verified'),
+      Event.countDocuments(query)
+    ]);
+
+    res.json({ events, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
@@ -61,11 +68,17 @@ exports.boostEvent = async (req, res) => {
 
 exports.getTrending = async (req, res) => {
   try {
-    const events = await Event.find({ status: 'published', date: { $gte: new Date() } })
-      .sort({ trending: -1 })
-      .limit(10)
-      .populate('organizer', 'username verified');
-    res.json(events);
+    const { page = 1, limit = 8 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [events, total] = await Promise.all([
+      Event.find({ status: 'published', date: { $gte: new Date() } })
+        .sort({ trending: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .populate('organizer', 'username verified'),
+      Event.countDocuments({ status: 'published', date: { $gte: new Date() } })
+    ]);
+    res.json({ events, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
@@ -85,24 +98,21 @@ exports.getRecommended = async (req, res) => {
 
 exports.getNearby = async (req, res) => {
   try {
-    const { lng, lat, maxDistance = 50000 } = req.query;
+    const { lng, lat, maxDistance = 50000, page = 1, limit = 8 } = req.query;
     const events = await Event.find({
       status: 'published',
       'coordinates.lat': { $exists: true },
       'coordinates.lon': { $exists: true }
     }).populate('organizer', 'username verified');
     
-    // Filter by distance using coordinates
-    const nearbyEvents = events.filter(event => {
+    const filtered = lat && lng ? events.filter(event => {
       if (!event.coordinates?.lat || !event.coordinates?.lon) return false;
-      const distance = getDistance(
-        parseFloat(lat), parseFloat(lng),
-        event.coordinates.lat, event.coordinates.lon
-      );
-      return distance <= parseInt(maxDistance);
-    });
-    
-    res.json(nearbyEvents);
+      return getDistance(parseFloat(lat), parseFloat(lng), event.coordinates.lat, event.coordinates.lon) <= parseInt(maxDistance);
+    }) : events;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const paginated = filtered.slice(skip, skip + parseInt(limit));
+    res.json({ events: paginated, total: filtered.length, page: parseInt(page), pages: Math.ceil(filtered.length / parseInt(limit)) });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }
